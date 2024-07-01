@@ -33,6 +33,11 @@ class Vec3:
             return Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
         else:
             raise TypeError(f"Can't add type '{type(other)}' to Vec3")
+    def __sub__(self, other):
+        if type(other) == type(self):
+            return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+        else:
+            raise TypeError(f"Can't sub type '{type(other)}' to Vec3")
 
     def __mul__(self, other):
         if not type(other) == int and not type(other) == float:
@@ -72,6 +77,8 @@ def rotateZ(coords, rad):
 BRANCH_BIAS = 2*pi/5
 BIAS_STRENGTH = 0.6
 
+leaves = []
+
 class Section:
     def __init__(self, length, width, pos, angles):
         self.length = length
@@ -87,6 +94,16 @@ class Section:
         self.inarow = inarow
         self.is_trunk = is_trunk
         if self.width < 1:
+            # TODO leaf clumping??
+            max_radius = random.uniform(5, 10)
+            for i in range(random.randint(100, 240)):
+                azimuth = random.uniform(-pi, pi)
+                elevation = random.uniform(0, 2*pi/3)
+                dir = spherical(Vec2(elevation, azimuth))
+                radius = random.uniform(max_radius - 3, max_radius)
+                offset = dir * radius
+                pos = self.pos + offset
+                leaves.append(pos)
             return
 
         bias_factor = abs(self.angles.x - bias.x)
@@ -259,35 +276,69 @@ class Section:
                         y = int(end_pos.y + dy - actual_width/2) + resolution//4*3
                         depth = buf[y * resolution + x][1]
                         if end_pos.z < depth:
-                            col = # TODO calculate normals
-                            buf[y*resolution+x] = (col, end_pos.z)
+                            col = [128, 128, 128]# TODO calculate normals
+                            buf[y*resolution+x] = [col, end_pos.z, False]
         for c in self.children:
             c.draw(ang)
 
 scl = 6
 DRAW_LINE = True
 DRAW_PX = False
-MAX_WIDTH = 10
+MAX_WIDTH = 8
 LENGTH = 2
 resolution = 128
 w, h = resolution*scl, resolution*scl
 size(w, h)
 
 
+random.seed(1719787185677640004)
 root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
 root.tree(0, Vec2(0, None), True)
-buf = [(0, 255)] * resolution * resolution
+def mkbuf():
+    return [[[0, 0, 0], 255, False] for i in range(resolution * resolution)]
+
+buf = mkbuf()
 
 def loop():
     global buf
     background(0, 0, 0)
-    buf = [(0, 255)] * resolution * resolution
+    buf = mkbuf()
     if DRAW_LINE:
         translate(w//2, h//4*3)
     else:
         translate(0, 0)
     root.draw(ang)
+
     if DRAW_PX:
+        LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2))
+        LEAF_RAD = 1
+        for leaf in leaves:
+            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+            idx = int(pos.y + resolution//4*3) * resolution + int(pos.x + resolution//2)
+            # if buf[idx][0][0] == 255: continue
+            # if not buf[idx][2]:
+            #     buf[idx][0][1] = 255
+            # else:
+            #     buf[idx][0][1] -= 16
+            # buf[idx][1] = 0
+            # buf[idx][2] = True
+            # continue
+            if pos.z < buf[idx][1]:
+                ray = Vec3(leaf.x, leaf.y, leaf.z) + LIGHT_DIR * LEAF_RAD;
+                done = False
+                light = 255
+                for i in range(6):
+                    for leaf2 in leaves:
+                        if leaf2 == leaf:
+                            continue
+                        delta = leaf2 - ray
+                        dist = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z
+                        if dist < LEAF_RAD**2:
+                            light *= 0.97
+                    ray += LIGHT_DIR * 0.5
+            
+                buf[idx]= ((0, light, 0), pos.z)
+            # circle(pos.x * scl, pos.y * scl, 2)
         # offset = int(w * (scl/8 - 1) / 2)
         for x in range(resolution):
             for y in range(resolution):
@@ -309,8 +360,28 @@ def loop():
                     # r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
                     # fill(int(r*255),int(g*255),int(b*255))
                     r, g, b = val[0]
-                    fill(r, g, b)
+                    if g > 255:
+                        g = 255
+                    if g < 0:
+                        g = 0
+                    
+                    z = val[1]
+                    # factor = (-z + 20) / 40
+                    # if factor < 0:
+                    #     factor = 0
+                    # if factor > 1:
+                    #     factor = 1
+                    factor = 1
+                    fill(int(r*factor), int(g*factor), int(b*factor))
                     rect(x * scl, y * scl - scl/2, round(scl), round(scl))
+    else:
+        for leaf in leaves:
+            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+            idx = int(pos.y + resolution//4*3) * resolution + int(pos.x + resolution//2)
+
+            fill(0, 128, 0)
+            no_stroke()
+            circle(pos.x * scl, pos.y * scl, 1)
     update()
     time.sleep(1/60.0)
     # ang.y += 0.05
@@ -324,6 +395,10 @@ def on_mouse_button_down(e):
     global scl
     try:
         if e.button == 1:
+            leaves.clear()
+            seed = time.time_ns()
+            print(seed)
+            random.seed(seed)
             root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
             root.tree(0, Vec2(0, None), True)
     except Exception as e:
