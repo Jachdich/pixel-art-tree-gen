@@ -1,8 +1,7 @@
-import sys
-sys.path.append("..")
-from pyrocessing import *
+import pygame
 from math import *
 import random, time, colorsys
+import traceback
 
 class Vec2:
     def __init__(self, x, y):
@@ -28,6 +27,9 @@ class Vec3:
         self.y = y
         self.z = z
 
+    def xy(self) -> Vec2:
+        return Vec2(self.x, self.y)
+
     def __add__(self, other):
         if type(other) == type(self):
             return Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
@@ -43,6 +45,10 @@ class Vec3:
         if not type(other) == int and not type(other) == float:
             raise TypeError(f"Can't multiply type '{type(other)}' with Vec3")
         return Vec3(self.x * other, self.y * other, self.z * other)
+    def __addeq__(self, other):
+        self.x += other.x
+        self.y += other.y
+        self.z += other.z
     def __repr__(self):
         return f"Vec2({self.x}, {self.y}, {self.z})"
 
@@ -95,15 +101,17 @@ class Section:
         self.is_trunk = is_trunk
         if self.width < 1:
             # TODO leaf clumping??
-            max_radius = random.uniform(5, 10)
-            for i in range(random.randint(100, 240)):
+            max_radius = random.uniform(4, 10)
+            leaf_bundle = []
+            for i in range(random.randint(400, 800)):
                 azimuth = random.uniform(-pi, pi)
-                elevation = random.uniform(0, 2*pi/3)
+                elevation = random.uniform(0, pi/2)
                 dir = spherical(Vec2(elevation, azimuth))
-                radius = random.uniform(max_radius - 3, max_radius)
+                radius = random.uniform(max_radius - 2, max_radius)
                 offset = dir * radius
                 pos = self.pos + offset
-                leaves.append(pos)
+                leaf_bundle.append(pos)
+            leaves.append((leaf_bundle, self.pos, max_radius + 1))
             return
 
         bias_factor = abs(self.angles.x - bias.x)
@@ -256,14 +264,16 @@ class Section:
             end_pos = rotateX(rotateZ(end_pos, ang.y), ang.x)
             start_pos = rotateX(rotateZ(self.pos, ang.y), ang.x)
             hue = 0.5 if self.is_trunk else 0.0
-            value = (-end_pos.z + 20) / 40
+            value = (-end_pos.z + 30) / 60
             if value > 1: value = 1
             if value < 0: value = 0
             r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
-            stroke(int(r*255), int(g*255), int(b*255))
-            line(start_pos.x * scl, start_pos.y * scl, end_pos.x* scl, end_pos.y * scl)
+            col = (int(r*255), int(g*255), int(b*255))
+
+            end_pos = end_pos.xy() + ORIGIN
+            start_pos = start_pos.xy() + ORIGIN
+            pygame.draw.line(screen, col, (start_pos.x * scl, start_pos.y * scl), (end_pos.x* scl, end_pos.y * scl))
         if DRAW_PX:
-            no_stroke()
             for n in range(0, int(self.length)):
                 end_pos = spherical(self.angles) * n + self.pos
                 end_pos = rotateX(rotateZ(end_pos, ang.y), ang.x)
@@ -272,8 +282,8 @@ class Section:
 
                 for dx in range(actual_width):
                     for dy in range(actual_width):
-                        x = int(end_pos.x + dx - actual_width/2) + resolution//2
-                        y = int(end_pos.y + dy - actual_width/2) + resolution//4*3
+                        x = int(end_pos.x + dx - actual_width/2) + ORIGIN.x
+                        y = int(end_pos.y + dy - actual_width/2) + ORIGIN.y
                         depth = buf[y * resolution + x][1]
                         if end_pos.z < depth:
                             col = [128, 128, 128]# TODO calculate normals
@@ -281,17 +291,39 @@ class Section:
         for c in self.children:
             c.draw(ang)
 
-scl = 6
+scl = 12
 DRAW_LINE = True
 DRAW_PX = False
 MAX_WIDTH = 8
 LENGTH = 2
-resolution = 128
+resolution = 100
 w, h = resolution*scl, resolution*scl
-size(w, h)
+pygame.init()
+screen = pygame.display.set_mode((w, h))
 
+ORIGIN = Vec2(resolution//2, resolution//4*3)
+LEAF_RAD = 3
+LEAF_COLOURS = [
+"#1F2E52",
+"#223D54",
+"#2E5C6B",
+"#36777A",
+"#50AB76",
+"#69C976",
+"#A0DE85",
+"#CFF291",
+]
 
-random.seed(1719787185677640004)
+def parse_html(code):
+    code = code.strip("#")
+    return int(code[0:2], 16), int(code[2:4], 16), int(code[4:6], 16)
+
+LEAF_COLOURS = [parse_html(col) for col in LEAF_COLOURS]
+
+# random.seed(1719787185677640004)
+# random.seed(1720197045754790405)
+# random.seed(1720202971045046679)
+random.seed(1720203587067500479)
 root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
 root.tree(0, Vec2(0, None), True)
 def mkbuf():
@@ -299,46 +331,60 @@ def mkbuf():
 
 buf = mkbuf()
 
+def raycast(leaf):
+    LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2)) * 1
+    pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+    idx = int(pos.y + ORIGIN.y) * resolution + int(pos.x + ORIGIN.x)
+    if pos.z <= buf[idx][1]:
+        ray = Vec3(leaf.x, leaf.y, leaf.z) + LIGHT_DIR * LEAF_RAD;
+        done = False
+        light = 1
+        for i in range(40):
+            col = (0, 0, 255)
+            for leaf_bundle, bundlepos, bundlerad in leaves:
+                bundle_dist = (bundlepos.x - ray.x) * (bundlepos.x - ray.x) + (bundlepos.y - ray.y) * (bundlepos.y - ray.y) + (bundlepos.z - ray.z) * (bundlepos.z - ray.z)
+                if bundle_dist > bundlerad * bundlerad:
+                    continue
+                for leaf2 in leaf_bundle:
+                    if leaf2 is leaf:
+                        continue
+                    # delta = leaf2 - ray
+                    dist = (leaf2.x - ray.x) * (leaf2.x - ray.x) + (leaf2.y - ray.y) * (leaf2.y - ray.y) + (leaf2.z - ray.z) * (leaf2.z - ray.z)
+                    if dist < LEAF_RAD**2:
+                        light *= 0.999
+                        col = (255, 0, 0)
+        
+
+            if DRAW_LINE:
+                start = (rotateX(rotateZ(ray, ang.y), ang.x).xy() + ORIGIN) * scl
+                end = (rotateX(rotateZ(ray + LIGHT_DIR, ang.y), ang.x).xy() + ORIGIN) * scl
+                pygame.draw.line(screen, col, (start.x, start.y), (end.x, end.y))
+            ray += LIGHT_DIR
+        
+        col = LEAF_COLOURS[int(light * (len(LEAF_COLOURS) - 1))]
+        buf[idx] = (col, pos.z)
+        return col
+
+frame_number = 0
 def loop():
     global buf
-    background(0, 0, 0)
+    global frame_number
+    screen.fill((0, 0, 0))
     buf = mkbuf()
-    if DRAW_LINE:
-        translate(w//2, h//4*3)
-    else:
-        translate(0, 0)
     root.draw(ang)
 
     if DRAW_PX:
-        LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2))
-        LEAF_RAD = 1
-        for leaf in leaves:
-            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
-            idx = int(pos.y + resolution//4*3) * resolution + int(pos.x + resolution//2)
-            # if buf[idx][0][0] == 255: continue
-            # if not buf[idx][2]:
-            #     buf[idx][0][1] = 255
-            # else:
-            #     buf[idx][0][1] -= 16
-            # buf[idx][1] = 0
-            # buf[idx][2] = True
-            # continue
-            if pos.z < buf[idx][1]:
-                ray = Vec3(leaf.x, leaf.y, leaf.z) + LIGHT_DIR * LEAF_RAD;
-                done = False
-                light = 255
-                for i in range(6):
-                    for leaf2 in leaves:
-                        if leaf2 == leaf:
-                            continue
-                        delta = leaf2 - ray
-                        dist = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z
-                        if dist < LEAF_RAD**2:
-                            light *= 0.97
-                    ray += LIGHT_DIR * 0.5
-            
-                buf[idx]= ((0, light, 0), pos.z)
-            # circle(pos.x * scl, pos.y * scl, 2)
+        for leaf_bundle in leaves:
+            for leaf in leaf_bundle[0]:
+                pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+                idx = int(pos.y + ORIGIN.y) * resolution + int(pos.x + ORIGIN.x)
+                if pos.z < buf[idx][1]:
+                    buf[idx] = (leaf, pos.z)
+    else:
+        leaf = leaves[0][0][sel_leaf]
+        raycast(leaf)
+    
+    if DRAW_PX:
         # offset = int(w * (scl/8 - 1) / 2)
         for x in range(resolution):
             for y in range(resolution):
@@ -359,7 +405,11 @@ def loop():
                     
                     # r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
                     # fill(int(r*255),int(g*255),int(b*255))
-                    r, g, b = val[0]
+                    if type(val[0]) == Vec3:
+                        col = raycast(val[0])
+                    else:
+                        col = val[0]
+                    r, g, b = col
                     if g > 255:
                         g = 255
                     if g < 0:
@@ -372,50 +422,54 @@ def loop():
                     # if factor > 1:
                     #     factor = 1
                     factor = 1
-                    fill(int(r*factor), int(g*factor), int(b*factor))
-                    rect(x * scl, y * scl - scl/2, round(scl), round(scl))
+                    col = (int(r*factor), int(g*factor), int(b*factor))
+                    pygame.draw.rect(screen, col, (x * scl, y * scl - scl/2, round(scl), round(scl)))
+        pygame.image.save(screen, f"frame{frame_number:04d}.png")
+        frame_number += 1
     else:
-        for leaf in leaves:
-            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
-            idx = int(pos.y + resolution//4*3) * resolution + int(pos.x + resolution//2)
+        for leaf_bundle in leaves:
+            for leaf in leaf_bundle[0]:
+                pos = rotateX(rotateZ(leaf, ang.y), ang.x)
 
-            fill(0, 128, 0)
-            no_stroke()
-            circle(pos.x * scl, pos.y * scl, 1)
-    update()
+                hue = 0.3
+                value = (-pos.z + 30) / 60
+                if value > 1: value = 1
+                if value < 0: value = 0
+                r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
+                col = (int(r*255), int(g*255), int(b*255))
+                pos = pos.xy() + ORIGIN
+                idx = int(pos.y) * resolution + int(pos.x)
+                pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
+    pygame.display.flip()
     time.sleep(1/60.0)
     # ang.y += 0.05
 
 ang = Vec2(pi/2, 0)
+sel_leaf = 100
 
-import traceback
-@event
 def on_mouse_button_down(e):
     global root
     global scl
-    try:
-        if e.button == 1:
-            leaves.clear()
-            seed = time.time_ns()
-            print(seed)
-            random.seed(seed)
-            root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
-            root.tree(0, Vec2(0, None), True)
-    except Exception as e:
-        print(traceback.format_exc())
+    global sel_leaf
+    if e.button == 1:
+        leaves.clear()
+        seed = time.time_ns()
+        print(seed)
+        random.seed(seed)
+        root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
+        root.tree(0, Vec2(0, None), True)
+    elif e.button == 5:
+        sel_leaf += 1
+    elif e.button == 4:
+        sel_leaf -= 1
 
-@event
 def on_mouse_motion(e):
-    try:
-        if e.buttons[2] == 1:
-            ang.x += e.rel[1] * 0.04
-            ang.y += e.rel[0] * 0.04
-    except Exception as e:
-        print(traceback.format_exc())
+    if e.buttons[2] == 1:
+        ang.x += e.rel[1] * 0.04
+        ang.y += e.rel[0] * 0.04
 
 
 import pygame
-@event
 def on_keydown(e):
     global DRAW_PX
     global DRAW_LINE
@@ -427,4 +481,22 @@ def on_keydown(e):
             DRAW_PX = True
             DRAW_LINE = False
 
-loop_on(loop)
+def main():
+    while True:
+        try:
+            for event in pygame.event.get():
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    on_mouse_button_down(event)
+                elif event.type == pygame.MOUSEMOTION:
+                    on_mouse_motion(event)
+                elif event.type == pygame.KEYDOWN:
+                    on_keydown(event)
+                elif event.type == pygame.QUIT:
+                    return
+            loop()
+        except Exception as e:
+            print(traceback.format_exc())
+            break
+
+if __name__ == "__main__":
+    main()
