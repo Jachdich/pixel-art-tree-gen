@@ -1,12 +1,17 @@
 import pygame
 from math import *
-import random, time, colorsys
+import random, time, colorsys, sys
 import traceback
+
+MAX_MEMBERS = int(sys.argv[1])
 
 class Vec2:
     def __init__(self, x, y):
         self.x = x
         self.y = y
+
+    def tup(self):
+        return (self.x, self.y)
 
     def __add__(self, other):
         if type(other) == type(self):
@@ -80,10 +85,98 @@ def rotateZ(coords, rad):
     y = coords.x * sina + coords.y * cosa
     return Vec3(x, y, coords.z)
 
+class Octree:
+    def __init__(self, origin: Vec3, rad: float):
+        self.children = []
+        self.points = []
+        self.centre = origin
+        self.rad = rad
+        self.leaf = True
+        
+    def add(self, point: Vec3):
+        if self.leaf:
+            self.points.append(point)
+            if len(self.points) > MAX_MEMBERS:# and self.rad > 1 * LEAF_RAD:
+                self.subdivide()
+        else:
+            top   = int(point.x > self.centre.x)
+            left  = int(point.y > self.centre.y)
+            front = int(point.z > self.centre.z)
+            index = top << 2 | left << 1 | front
+            self.children[index].add(point)
+
+    def subdivide(self):
+        self.leaf = False
+        r = self.rad / 2
+        for i in range(8):
+            top =   ((i >> 2) & 1) * 2 - 1
+            left =  ((i >> 1) & 1) * 2 - 1
+            front = ((i >> 0) & 1) * 2 - 1
+            self.children.append(Octree(self.centre + Vec3(r * top, r * left, r * front), r))
+
+        # re-add now we're no longer a leaf
+        for point in self.points:
+            self.add(point)
+
+    def draw(self):
+        vertices = []
+        for i in range(8):
+            top =   ((i >> 2) & 1) * 2 - 1
+            left =  ((i >> 1) & 1) * 2 - 1
+            front = ((i >> 0) & 1) * 2 - 1
+            vertices.append(self.centre + Vec3(top, left, front) * self.rad)
+
+        for a, b in [
+            (0b000, 0b001), (0b000, 0b010), (0b000, 0b100),
+            (0b001, 0b011), (0b001, 0b101), (0b101, 0b100),
+            (0b101, 0b111), (0b010, 0b110), (0b010, 0b011),
+            (0b011, 0b111), (0b110, 0b111), (0b110, 0b100),
+        ]:
+            pos_a = vertices[a]
+            pos_b = vertices[b]
+            a_ss = (rotateX(rotateZ(pos_a, ang.y), ang.x).xy() + ORIGIN) * scl
+            b_ss = (rotateX(rotateZ(pos_b, ang.y), ang.x).xy() + ORIGIN) * scl
+            pygame.draw.line(screen, (255, 0, 255), a_ss.tup(), b_ss.tup())
+
+        # for c in self.children:
+        #     c.draw()
+
+    def query(self, pos) -> int:
+        # self.draw()
+        if self.leaf:
+            count = 0
+            for point in self.points:
+                if pos == point:
+                    continue
+                dist = (point.x - pos.x) * (point.x - pos.x) +\
+                       (point.y - pos.y) * (point.y - pos.y) +\
+                       (point.z - pos.z) * (point.z - pos.z)
+                if dist < LEAF_RAD * LEAF_RAD:
+                    count += 1
+            return count
+
+        top   = int(pos.x > self.centre.x)
+        left  = int(pos.y > self.centre.y)
+        front = int(pos.z > self.centre.z)
+        index = top << 2 | left << 1 | front
+        # self.children[index].draw()
+        return self.children[index].query(pos)
+
+            
+
 BRANCH_BIAS = 2*pi/5
 BIAS_STRENGTH = 0.6
 
 leaves = []
+bush_positions = []
+
+def frange(x, y, jump):
+  while x < y:
+    yield x
+    x += jump
+
+def lerp(a, b, t):
+    return a + (b-a) * t
 
 class Section:
     def __init__(self, length, width, pos, angles):
@@ -100,18 +193,7 @@ class Section:
         self.inarow = inarow
         self.is_trunk = is_trunk
         if self.width < 1:
-            # TODO leaf clumping??
-            max_radius = random.uniform(4, 10)
-            leaf_bundle = []
-            for i in range(random.randint(400, 800)):
-                azimuth = random.uniform(-pi, pi)
-                elevation = random.uniform(0, pi/2)
-                dir = spherical(Vec2(elevation, azimuth))
-                radius = random.uniform(max_radius - 2, max_radius)
-                offset = dir * radius
-                pos = self.pos + offset
-                leaf_bundle.append(pos)
-            leaves.append((leaf_bundle, self.pos, max_radius + 1))
+            bush_positions.append(self.pos)
             return
 
         bias_factor = abs(self.angles.x - bias.x)
@@ -281,7 +363,8 @@ class Section:
 
                 
                 for dx in range(actual_width):
-                    for dy in range(round(self.length)):
+                    # for dy in range(round(self.length)):
+                        dy = 0
                         x = int(end_pos_ss.x + dx - actual_width/2) + ORIGIN.x
                         y = int(end_pos_ss.y + dy - actual_width/2) + ORIGIN.y
                         depth = buf[y * resolution + x][1]
@@ -295,8 +378,8 @@ class Section:
             c.draw(ang)
 
 scl = 12
-DRAW_LINE = True
-DRAW_PX = False
+DRAW_LINE = False
+DRAW_PX = True
 MAX_WIDTH = 8
 LENGTH = 2
 resolution = 100
@@ -333,8 +416,28 @@ LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2)) * 1
 #     "#a8ca58",
 # ]
 
-LEAF_COLOURS = ["354341", "446d4d", "78944b", "abae54"]
+# LEAF_COLOURS = ["354341", "446d4d", "78944b", "abae54"]
 
+
+MAX_HUE_SHIFT = 0.2
+NUM_COLOURS = 5
+MIN_VALUE = 0.2
+MAX_VALUE = 0.9
+
+def qerp(a, b, c, t):
+    return (1-t)**2*a+2*(1-t)*t*b+t**2*c
+
+def generate_palette(init_hue):
+    palette = []
+    for i in range(NUM_COLOURS):
+        hue_shift = qerp(MAX_HUE_SHIFT, -MAX_HUE_SHIFT, -MAX_HUE_SHIFT, i/(NUM_COLOURS-1))
+        value = lerp(MIN_VALUE, MAX_VALUE, i/(NUM_COLOURS-1))
+        saturation = qerp(0.2, 0.5, 0.5, i/(NUM_COLOURS-1))
+        r,g,b = colorsys.hsv_to_rgb(init_hue + hue_shift, saturation, value)
+        palette.append([int(r * 255), int(g * 255), int(b * 255)])
+    return palette
+
+LEAF_COLOURS = generate_palette(0.38)
 TRUNK_COLOURS = [
     "353130", "4d403d", "64534b", "8a6b58", "b0945e",
 ]
@@ -343,17 +446,50 @@ def parse_html(code):
     code = code.strip("#")
     return int(code[0:2], 16), int(code[2:4], 16), int(code[4:6], 16)
 
-LEAF_COLOURS = [parse_html(col) for col in LEAF_COLOURS]
+# LEAF_COLOURS = [parse_html(col) for col in LEAF_COLOURS]
 TRUNK_COLOURS = [parse_html(col) for col in TRUNK_COLOURS]
 
-# random.seed(1719787185677640004)
-# random.seed(1720197045754790405)
-# random.seed(1720202971045046679)
-# random.seed(1720203587067500479)
-random.seed(1720622865091475633)
+def make_leaves():
+    for bush_pos in bush_positions:
+        # # TODO leaf clumping??
+        # for i in range(random.randint(200, 400)):
+        #     azimuth = random.uniform(-pi, pi)
+        #     elevation = random.uniform(0, pi/2)
+        #     dir = spherical(Vec2(elevation, azimuth))
+        #     radius = random.uniform(max_radius - 1, max_radius)
+        #     offset = dir * radius
+        #     pos = self.pos + offset
+        #     leaves.append(pos)
 
-root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
-root.tree(0, Vec2(0, None), True)
+        max_radius = random.uniform(4, 10)
+        for elevation in frange(0, 3*pi/5, 0.8 / max_radius):
+            for azimuth in frange(-pi, pi, lerp(3.0, 0.3, elevation / (3*pi/5)) / max_radius):
+                radius = random.uniform(max_radius - 4, max_radius)
+                dir = spherical(Vec2(elevation, azimuth))
+                offset = dir * radius
+                pos = bush_pos + offset
+                leaves.append(pos)
+
+root = None
+leaf_octree = None
+def make_tree():
+    global root, leaf_octree
+    leaves.clear()
+    bush_positions.clear()
+    root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
+    root.tree(0, Vec2(0, None), True)
+
+    make_leaves()
+    
+    avg = lambda xs: sum(xs) / len(xs)
+    o = Vec3(avg([l.x for l in leaves]), avg([l.y for l in leaves]), avg([l.z for l in leaves]))
+    rad = max([max(abs(l.x - o.x), abs(l.y - o.y), abs(l.z - o.z)) for l in leaves]) + 0.1 # for good luck
+    leaf_octree = Octree(o, rad)
+    for leaf in leaves:
+        leaf_octree.add(leaf)
+
+make_tree()
+
 def mkbuf():
     return [[[0, 0, 0], 255, False] for i in range(resolution * resolution)]
 
@@ -362,20 +498,12 @@ buf = mkbuf()
 def raycast(pos):
     ray = Vec3(pos.x, pos.y, pos.z) + LIGHT_DIR * LEAF_RAD;
     light = 1
-    for i in range(40):
+    for i in range(30):
         col = (0, 0, 255)
-        for leaf_bundle, bundlepos, bundlerad in leaves:
-            bundle_dist = (bundlepos.x - ray.x) * (bundlepos.x - ray.x) + (bundlepos.y - ray.y) * (bundlepos.y - ray.y) + (bundlepos.z - ray.z) * (bundlepos.z - ray.z)
-            if bundle_dist > bundlerad * bundlerad:
-                continue
-            for leaf2 in leaf_bundle:
-                if leaf2 == pos:
-                    continue
-                # delta = leaf2 - ray
-                dist = (leaf2.x - ray.x) * (leaf2.x - ray.x) + (leaf2.y - ray.y) * (leaf2.y - ray.y) + (leaf2.z - ray.z) * (leaf2.z - ray.z)
-                if dist < LEAF_RAD**2:
-                    light *= 0.999
-                    col = (255, 0, 0)
+        leaves_hit = leaf_octree.query(ray)
+        if leaves_hit > 0:
+            light *= 0.98 ** leaves_hit
+            col = (255, 0, 0)
 
         if DRAW_LINE:
             start = (rotateX(rotateZ(ray, ang.y), ang.x).xy() + ORIGIN) * scl
@@ -402,14 +530,14 @@ def loop():
     root.draw(ang)
 
     if DRAW_PX:
-        for leaf_bundle in leaves:
-            for leaf in leaf_bundle[0]:
-                pos = rotateX(rotateZ(leaf, ang.y), ang.x)
-                idx = int(pos.y + ORIGIN.y) * resolution + int(pos.x + ORIGIN.x)
-                if pos.z < buf[idx][1]:
-                    buf[idx] = (leaf, pos.z)
+        for leaf in leaves:
+            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+            idx = int(pos.y + ORIGIN.y) * resolution + int(pos.x + ORIGIN.x)
+            if pos.z < buf[idx][1]:
+                buf[idx] = (leaf, pos.z)
     else:
-        leaf = leaves[0][0][sel_leaf]
+        pass
+        leaf = leaves[sel_leaf]
         draw_leaf(leaf)
     
     if DRAW_PX:
@@ -452,40 +580,37 @@ def loop():
                     factor = 1
                     col = (int(r*factor), int(g*factor), int(b*factor))
                     pygame.draw.rect(screen, col, (x * scl, y * scl - scl/2, round(scl), round(scl)))
-        pygame.image.save(screen, f"frame{frame_number:04d}.png")
+        # pygame.image.save(screen, f"frame{frame_number:04d}.png")
         frame_number += 1
     else:
-        for leaf_bundle in leaves:
-            for leaf in leaf_bundle[0]:
-                pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+        # leaf_octree.draw()
+        for leaf in leaves:
+            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
 
-                hue = 0.3
-                value = (-pos.z + 30) / 60
-                if value > 1: value = 1
-                if value < 0: value = 0
-                r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
-                col = (int(r*255), int(g*255), int(b*255))
-                pos = pos.xy() + ORIGIN
-                idx = int(pos.y) * resolution + int(pos.x)
-                pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
+            hue = 0.3
+            value = (-pos.z + 30) / 60
+            if value > 1: value = 1
+            if value < 0: value = 0
+            r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
+            col = (int(r*255), int(g*255), int(b*255))
+            pos = pos.xy() + ORIGIN
+            idx = int(pos.y) * resolution + int(pos.x)
+            pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
     pygame.display.flip()
-    time.sleep(1/60.0)
-    # ang.y += 0.05
+    ang.y += 0.08
 
 ang = Vec2(pi/2, 0)
-sel_leaf = 100
+sel_leaf = 1
 
 def on_mouse_button_down(e):
     global root
     global scl
     global sel_leaf
     if e.button == 1:
-        leaves.clear()
         seed = time.time_ns()
         print(seed)
         random.seed(seed)
-        root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
-        root.tree(0, Vec2(0, None), True)
+        make_tree()
     elif e.button == 5:
         sel_leaf += 1
     elif e.button == 4:
@@ -510,6 +635,10 @@ def on_keydown(e):
             DRAW_LINE = False
 
 def main():
+    total = 0
+    # for i in range(50):
+    # init_hue = 0.5
+    # global LEAF_COLOURS
     while True:
         try:
             for event in pygame.event.get():
@@ -521,10 +650,18 @@ def main():
                     on_keydown(event)
                 elif event.type == pygame.QUIT:
                     return
+            a = time.time()
             loop()
+            b = time.time()
+            rate = 1/(b-a)
+            total += rate
+
+            # init_hue += 0.01
+            # LEAF_COLOURS = generate_palette(init_hue)
         except Exception as e:
             print(traceback.format_exc())
             break
+    print(total / 50)
 
 if __name__ == "__main__":
     main()
