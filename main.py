@@ -276,18 +276,21 @@ class Section:
         if DRAW_PX:
             for n in range(0, int(self.length)):
                 end_pos = spherical(self.angles) * n + self.pos
-                end_pos = rotateX(rotateZ(end_pos, ang.y), ang.x)
+                end_pos_ss = rotateX(rotateZ(end_pos, ang.y), ang.x)
                 actual_width = round(self.width / MAX_WIDTH * 2.8) + 1
-                c = int(end_pos.z)
 
+                
                 for dx in range(actual_width):
-                    for dy in range(actual_width):
-                        x = int(end_pos.x + dx - actual_width/2) + ORIGIN.x
-                        y = int(end_pos.y + dy - actual_width/2) + ORIGIN.y
+                    for dy in range(round(self.length)):
+                        x = int(end_pos_ss.x + dx - actual_width/2) + ORIGIN.x
+                        y = int(end_pos_ss.y + dy - actual_width/2) + ORIGIN.y
                         depth = buf[y * resolution + x][1]
-                        if end_pos.z < depth:
-                            col = [128, 128, 128]# TODO calculate normals
-                            buf[y*resolution+x] = [col, end_pos.z, False]
+                        if end_pos_ss.z < depth:
+                            pixel_ws = rotateZ(rotateX(Vec3(x, y, end_pos_ss.z) - Vec3(ORIGIN.x, ORIGIN.y, 0), -ang.x), -ang.y)
+                            
+                            light = raycast(pixel_ws)
+                            col = TRUNK_COLOURS[int(light * (len(TRUNK_COLOURS) - 1))]
+                            buf[y*resolution+x] = [col, end_pos_ss.z, False]
         for c in self.children:
             c.draw(ang)
 
@@ -303,15 +306,37 @@ screen = pygame.display.set_mode((w, h))
 
 ORIGIN = Vec2(resolution//2, resolution//4*3)
 LEAF_RAD = 3
-LEAF_COLOURS = [
-"#1F2E52",
-"#223D54",
-"#2E5C6B",
-"#36777A",
-"#50AB76",
-"#69C976",
-"#A0DE85",
-"#CFF291",
+LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2)) * 1
+# LEAF_COLOURS = [
+# "#1F2E52",
+# "#223D54",
+# "#2E5C6B",
+# "#36777A",
+# "#50AB76",
+# "#69C976",
+# "#A0DE85",
+# "#CFF291",
+# ]
+
+# LEAF_COLOURS = [
+# "#2f4d2f", 
+# "#44702d",
+# "#819447",
+# "#a6b04f",
+# ]
+
+# LEAF_COLOURS = [
+#     "#19332d",
+#     "#25562e",
+#     "#468232",
+#     "#75a743",
+#     "#a8ca58",
+# ]
+
+LEAF_COLOURS = ["354341", "446d4d", "78944b", "abae54"]
+
+TRUNK_COLOURS = [
+    "353130", "4d403d", "64534b", "8a6b58", "b0945e",
 ]
 
 def parse_html(code):
@@ -319,11 +344,14 @@ def parse_html(code):
     return int(code[0:2], 16), int(code[2:4], 16), int(code[4:6], 16)
 
 LEAF_COLOURS = [parse_html(col) for col in LEAF_COLOURS]
+TRUNK_COLOURS = [parse_html(col) for col in TRUNK_COLOURS]
 
 # random.seed(1719787185677640004)
 # random.seed(1720197045754790405)
 # random.seed(1720202971045046679)
-random.seed(1720203587067500479)
+# random.seed(1720203587067500479)
+random.seed(1720622865091475633)
+
 root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
 root.tree(0, Vec2(0, None), True)
 def mkbuf():
@@ -331,36 +359,36 @@ def mkbuf():
 
 buf = mkbuf()
 
-def raycast(leaf):
-    LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2)) * 1
+def raycast(pos):
+    ray = Vec3(pos.x, pos.y, pos.z) + LIGHT_DIR * LEAF_RAD;
+    light = 1
+    for i in range(40):
+        col = (0, 0, 255)
+        for leaf_bundle, bundlepos, bundlerad in leaves:
+            bundle_dist = (bundlepos.x - ray.x) * (bundlepos.x - ray.x) + (bundlepos.y - ray.y) * (bundlepos.y - ray.y) + (bundlepos.z - ray.z) * (bundlepos.z - ray.z)
+            if bundle_dist > bundlerad * bundlerad:
+                continue
+            for leaf2 in leaf_bundle:
+                if leaf2 == pos:
+                    continue
+                # delta = leaf2 - ray
+                dist = (leaf2.x - ray.x) * (leaf2.x - ray.x) + (leaf2.y - ray.y) * (leaf2.y - ray.y) + (leaf2.z - ray.z) * (leaf2.z - ray.z)
+                if dist < LEAF_RAD**2:
+                    light *= 0.999
+                    col = (255, 0, 0)
+
+        if DRAW_LINE:
+            start = (rotateX(rotateZ(ray, ang.y), ang.x).xy() + ORIGIN) * scl
+            end = (rotateX(rotateZ(ray + LIGHT_DIR, ang.y), ang.x).xy() + ORIGIN) * scl
+            pygame.draw.line(screen, col, (start.x, start.y), (end.x, end.y))
+        ray += LIGHT_DIR
+    return light
+
+def draw_leaf(leaf):
     pos = rotateX(rotateZ(leaf, ang.y), ang.x)
     idx = int(pos.y + ORIGIN.y) * resolution + int(pos.x + ORIGIN.x)
     if pos.z <= buf[idx][1]:
-        ray = Vec3(leaf.x, leaf.y, leaf.z) + LIGHT_DIR * LEAF_RAD;
-        done = False
-        light = 1
-        for i in range(40):
-            col = (0, 0, 255)
-            for leaf_bundle, bundlepos, bundlerad in leaves:
-                bundle_dist = (bundlepos.x - ray.x) * (bundlepos.x - ray.x) + (bundlepos.y - ray.y) * (bundlepos.y - ray.y) + (bundlepos.z - ray.z) * (bundlepos.z - ray.z)
-                if bundle_dist > bundlerad * bundlerad:
-                    continue
-                for leaf2 in leaf_bundle:
-                    if leaf2 is leaf:
-                        continue
-                    # delta = leaf2 - ray
-                    dist = (leaf2.x - ray.x) * (leaf2.x - ray.x) + (leaf2.y - ray.y) * (leaf2.y - ray.y) + (leaf2.z - ray.z) * (leaf2.z - ray.z)
-                    if dist < LEAF_RAD**2:
-                        light *= 0.999
-                        col = (255, 0, 0)
-        
-
-            if DRAW_LINE:
-                start = (rotateX(rotateZ(ray, ang.y), ang.x).xy() + ORIGIN) * scl
-                end = (rotateX(rotateZ(ray + LIGHT_DIR, ang.y), ang.x).xy() + ORIGIN) * scl
-                pygame.draw.line(screen, col, (start.x, start.y), (end.x, end.y))
-            ray += LIGHT_DIR
-        
+        light = raycast(leaf)
         col = LEAF_COLOURS[int(light * (len(LEAF_COLOURS) - 1))]
         buf[idx] = (col, pos.z)
         return col
@@ -382,7 +410,7 @@ def loop():
                     buf[idx] = (leaf, pos.z)
     else:
         leaf = leaves[0][0][sel_leaf]
-        raycast(leaf)
+        draw_leaf(leaf)
     
     if DRAW_PX:
         # offset = int(w * (scl/8 - 1) / 2)
@@ -406,7 +434,7 @@ def loop():
                     # r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
                     # fill(int(r*255),int(g*255),int(b*255))
                     if type(val[0]) == Vec3:
-                        col = raycast(val[0])
+                        col = draw_leaf(val[0])
                     else:
                         col = val[0]
                     r, g, b = col
