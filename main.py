@@ -166,6 +166,7 @@ class Octree:
 
 BRANCH_BIAS = 2*pi/5
 BIAS_STRENGTH = 0.6
+correct = True
 
 leaves = []
 bush_positions = []
@@ -198,21 +199,22 @@ class Section:
 
         bias_factor = abs(self.angles.x - bias.x)
         bias_input = Vec2(0, 0)
-        if bias_factor < pi/6:
-            bias_input.x = 0
-        elif self.angles.x > bias.x:
-            bias_input.x = -bias_factor * BIAS_STRENGTH
-        else:
-            bias_input.x = bias_factor * BIAS_STRENGTH
-
-        if bias.y is not None:
-            bias_factor = abs(self.angles.y - bias.y)
-            if bias_factor < pi/6:
-                bias_input.y = 0
+        if correct:
+            if bias_factor < pi/3:
+                bias_input.x = 0
             elif self.angles.x > bias.x:
-                bias_input.y = -bias_factor * BIAS_STRENGTH
+                bias_input.x = -bias_factor * BIAS_STRENGTH
             else:
-                bias_input.y = bias_factor * BIAS_STRENGTH
+                bias_input.x = bias_factor * BIAS_STRENGTH
+
+            if bias.y is not None:
+                bias_factor = abs(self.angles.y - bias.y)
+                if bias_factor < pi/3:
+                    bias_input.y = 0
+                elif self.angles.y > bias.y:
+                    bias_input.y = -bias_factor * BIAS_STRENGTH
+                else:
+                    bias_input.y = bias_factor * BIAS_STRENGTH
 
         MAX_STRAIGHT_CHANCE = 0.97
         MIN_STRAIGHT_CHANCE = 0.6
@@ -583,32 +585,35 @@ def loop():
         # pygame.image.save(screen, f"frame{frame_number:04d}.png")
         frame_number += 1
     else:
+        pass
         # leaf_octree.draw()
-        for leaf in leaves:
-            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+        # for leaf in leaves:
+        #     pos = rotateX(rotateZ(leaf, ang.y), ang.x)
 
-            hue = 0.3
-            value = (-pos.z + 30) / 60
-            if value > 1: value = 1
-            if value < 0: value = 0
-            r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
-            col = (int(r*255), int(g*255), int(b*255))
-            pos = pos.xy() + ORIGIN
-            idx = int(pos.y) * resolution + int(pos.x)
-            pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
+        #     hue = 0.3
+        #     value = (-pos.z + 30) / 60
+        #     if value > 1: value = 1
+        #     if value < 0: value = 0
+        #     r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
+        #     col = (int(r*255), int(g*255), int(b*255))
+        #     pos = pos.xy() + ORIGIN
+        #     idx = int(pos.y) * resolution + int(pos.x)
+        #     pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
     pygame.display.flip()
-    ang.y += 0.08
+    # ang.y += 0.08
 
 ang = Vec2(pi/2, 0)
 sel_leaf = 1
+last_seed = 0
 
 def on_mouse_button_down(e):
     global root
     global scl
-    global sel_leaf
+    global sel_leaf, last_seed
     if e.button == 1:
         seed = time.time_ns()
         print(seed)
+        last_seed = seed
         random.seed(seed)
         make_tree()
     elif e.button == 5:
@@ -625,7 +630,7 @@ def on_mouse_motion(e):
 import pygame
 def on_keydown(e):
     global DRAW_PX
-    global DRAW_LINE
+    global DRAW_LINE, correct
     if e.key == pygame.K_t:
         if DRAW_PX:
             DRAW_PX = False
@@ -633,6 +638,12 @@ def on_keydown(e):
         else:
             DRAW_PX = True
             DRAW_LINE = False
+    if e.key == pygame.K_e:
+        correct = not correct
+        random.seed(last_seed)
+        make_tree()
+        print(correct)
+        
 
 def main():
     total = 0
