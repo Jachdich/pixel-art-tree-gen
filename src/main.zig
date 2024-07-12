@@ -3,14 +3,176 @@ const assert = std.debug.assert;
 const RndGen = std.rand.DefaultPrng;
 const Allocator = std.mem.Allocator;
 const zigimg = @import("zigimg");
+const sin = std.math.sin;
+const cos = std.math.cos;
+const pi = std.math.pi;
+const sqrt = std.math.sqrt;
 
-const Section = struct {
+const Vec2 = struct {
     x: f64,
     y: f64,
-    angle: f64,
+
+    pub fn new(x: f64, y: f64) Vec2 {
+        return Vec2{
+            .x = x,
+            .y = y,
+        };
+    }
+    pub fn add(self: Vec2, other: Vec2) Vec2 {
+        return Vec2.new(self.x + other.x, self.y + other.y);
+    }
+    pub fn addeq(self: *Vec2, other: Vec2) void {
+        self.x += other.x;
+        self.y += other.y;
+    }
+    pub fn sub(self: Vec2, other: Vec2) Vec2 {
+        return Vec2.new(self.x - other.x, self.y - other.y);
+    }
+    pub fn subeq(self: *Vec2, other: Vec2) void {
+        self.x -= other.x;
+        self.y -= other.y;
+    }
+    pub fn scale(self: Vec2, f: f64) Vec2 {
+        return Vec2.new(self.x * f, self.y * f);
+    }
+    pub fn scaleeq(self: *Vec2, f: f64) void {
+        self.x *= f;
+        self.y *= f;
+    }
+};
+
+const Vec3 = struct {
+    x: f64,
+    y: f64,
+    z: f64,
+
+    pub fn new(x: f64, y: f64, z: f64) Vec3 {
+        return Vec3{ .x = x, .y = y, .z = z };
+    }
+
+    pub fn vec2(v: Vec2, z: f64) Vec3 {
+        return Vec3{ .x = v.x, .y = v.y, .z = z };
+    }
+
+    pub fn from_spherical(angles: Vec2) Vec3 {
+        return Vec3{
+            .x = sin(angles.x) * cos(angles.y),
+            .y = sin(angles.x) * sin(angles.y),
+            .z = cos(angles.x),
+        };
+    }
+
+    pub fn xy(self: Vec3) Vec2 {
+        return Vec2.new(self.x, self.y);
+    }
+
+    pub fn rotate(self: Vec3, angles: Vec2) Vec3 {
+        const cosx = cos(angles.x);
+        const sinx = sin(angles.x);
+        const cosy = cos(angles.y);
+        const siny = sin(angles.y);
+        const x = self.x * cosy - self.y * siny;
+        const y = self.x * siny + self.y * cosy;
+        const z = self.z;
+
+        return Vec3{
+            .x = x,
+            .y = y * cosx - z * sinx,
+            .z = y * sinx + z * cosx,
+        };
+    }
+
+    pub fn add(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.new(self.x + other.x, self.y + other.y, self.z + other.z);
+    }
+    pub fn addeq(self: *Vec3, other: Vec3) void {
+        self.x += other.x;
+        self.y += other.y;
+        self.z += other.z;
+    }
+    pub fn sub(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.new(self.x - other.x, self.y - other.y, self.z - other.z);
+    }
+    pub fn subeq(self: *Vec3, other: Vec3) void {
+        self.x -= other.x;
+        self.y -= other.y;
+        self.z -= other.z;
+    }
+    pub fn scale(self: Vec3, f: f64) Vec3 {
+        return Vec3.new(self.x * f, self.y * f, self.z * f);
+    }
+    pub fn scaleeq(self: *Vec3, f: f64) void {
+        self.x *= f;
+        self.y *= f;
+        self.z *= f;
+    }
+};
+
+const LENGTH = 2;
+const MAX_WIDTH = 8;
+const BIAS_STRENGTH = 0.6;
+const MAX_STRAIGHT_CHANCE = 0.97;
+const MIN_STRAIGHT_CHANCE = 0.6;
+
+const Section = struct {
+    angles: Vec2,
     width: f64,
-    length: f64,
+    bias: f64 = 0,
+    pos: Vec3,
+    end_pos: Vec3,
     children: [2]?*Section,
+
+    pub fn new(width: f64, pos: Vec3, angles: Vec2) Section {
+        return Section{
+            .angles = angles,
+            .width = width,
+            .bias = 0,
+            .children = .{ null, null },
+            .end_pos = Vec3.from_spherical(angles).scale(LENGTH).add(pos),
+        };
+    }
+
+    pub fn tree(self: *Section, inarow: usize, bias: Vec2, is_trunk: bool, rng: RndGen, alloc: Allocator) void {
+        self.bias = bias;
+        self.inarow = inarow;
+        self.is_trunk = is_trunk;
+        if (self.width < 1) {
+            // make leaves
+            return;
+        }
+
+        const bias_factor = @abs(self.angles.x - bias.x);
+        var bias_input = Vec2.new(0, 0);
+        if (bias_factor < pi / 3) {
+            bias_input.x = 0;
+        } else if (self.angles.x > bias.x) {
+            bias_input.x = -bias_factor * BIAS_STRENGTH;
+        } else {
+            bias_input.x = bias_factor * BIAS_STRENGTH;
+        }
+
+        if (!std.math.isNan(bias.y)) {
+            const bias_factor_y = @abs(self.angles.x - bias.x);
+            if (bias_factor_y < pi / 3) {
+                bias_input.x = 0;
+            } else if (self.angles.y > bias.x) {
+                bias_input.y = -bias_factor_y * BIAS_STRENGTH;
+            } else {
+                bias_input.y = bias_factor_y * BIAS_STRENGTH;
+            }
+        }
+
+        var straight_chance = (self.width / (sqrt(1 / (MAX_STRAIGHT_CHANCE - MIN_STRAIGHT_CHANCE)) * MAX_WIDTH)) ** 2 + MIN_STRAIGHT_CHANCE;
+        if (self.width >= 0.9 * MAX_WIDTH and inarow < 10) {
+            straight_chance = 1;
+        }
+        const n = MAX_WIDTH;
+        if (rng.random().float() > straight_chance or inarow > (-5 / (n - 1) * self.width + 5 / (n - 1) * n + 8)) {
+            self.branch(bias_input, rng, alloc);
+        } else {
+            self.go_straight(bias_input, rng, alloc);
+        }
+    }
 };
 
 fn end_pos(root: *Section) struct { f64, f64 } {
@@ -104,14 +266,6 @@ fn draw(root: *Section, buffer: []u8) void {
 }
 
 pub fn main() !void {
-    // const stdout_file = std.io.getStdOut().writer();
-    // var bw = std.io.bufferedWriter(stdout_file);
-    // const stdout = bw.writer();
-
-    // try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    // try bw.flush(); // don't forget to flush!
-
     var rnd = RndGen.init(0);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -133,11 +287,4 @@ pub fn main() !void {
     var image = try zigimg.Image.fromRawPixels(allocator, 128 * 10, 128, buffer[0..], .grayscale8);
     defer image.deinit();
     try image.writeToFilePath("image.png", .{ .png = .{} });
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }
