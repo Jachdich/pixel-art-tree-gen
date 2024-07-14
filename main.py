@@ -199,22 +199,21 @@ class Section:
 
         bias_factor = abs(self.angles.x - bias.x)
         bias_input = Vec2(0, 0)
-        if correct:
-            if bias_factor < pi/3:
-                bias_input.x = 0
-            elif self.angles.x > bias.x:
-                bias_input.x = -bias_factor * BIAS_STRENGTH
-            else:
-                bias_input.x = bias_factor * BIAS_STRENGTH
+        if bias_factor < pi/6:
+            bias_input.x = 0
+        elif self.angles.x > bias.x:
+            bias_input.x = -bias_factor * BIAS_STRENGTH
+        else:
+            bias_input.x = bias_factor * BIAS_STRENGTH
 
-            if bias.y is not None:
-                bias_factor = abs(self.angles.y - bias.y)
-                if bias_factor < pi/3:
-                    bias_input.y = 0
-                elif self.angles.y > bias.y:
-                    bias_input.y = -bias_factor * BIAS_STRENGTH
-                else:
-                    bias_input.y = bias_factor * BIAS_STRENGTH
+        if bias.y is not None:
+            bias_factor = abs(self.angles.y - bias.y)
+            if bias_factor < pi/6:
+                bias_input.y = 0
+            elif self.angles.y > bias.y:
+                bias_input.y = -bias_factor * BIAS_STRENGTH
+            else:
+                bias_input.y = bias_factor * BIAS_STRENGTH
 
         MAX_STRAIGHT_CHANCE = 0.97
         MIN_STRAIGHT_CHANCE = 0.6
@@ -245,16 +244,18 @@ class Section:
         self.children = [next]
 
     def branch(self, bias_input: Vec2):
-        MIN_TRUNK_WIDTH = 10
-        MAX_BRANCH_CHANCE = 10
-        # branch_chance = MAX_BRANCH_CHANCE / (MAX_WIDTH - MIN_TRUNK_WIDTH) * (self.width - MIN_TRUNK_WIDTH)
+        if correct:
+            MIN_TRUNK_WIDTH = MAX_WIDTH * 0.3
+        else:
+            MIN_TRUNK_WIDTH = 10
+        MAX_BRANCH_CHANCE = 1
         
         if self.width > MIN_TRUNK_WIDTH:
             branch_chance = (log(self.width-MIN_TRUNK_WIDTH)/log(MAX_WIDTH-MIN_TRUNK_WIDTH)+1)/2 * MAX_BRANCH_CHANCE
         else:
             branch_chance = 0
 
-        if random.random() < branch_chance and self.is_trunk == 0:
+        if random.random() < branch_chance and self.is_trunk:
             angles, widths, biases, trunks = self.branch_off_trunk(bias_input)
         else:
             angles, widths, biases, trunks = self.branch_equally()
@@ -265,10 +266,10 @@ class Section:
         
     def branch_off_trunk(self, bias_input):
         angles = [
-            straight_branch_angles(bias_input),
+            self.straight_branch_angles(bias_input),
             Vec2(
-                self.angles.x + (random.random() * pi/8 + pi/8),
-                self.angles.y + ((random.random() - 0.5) * pi/7),
+                self.angles.x + random.uniform(pi/8, pi/2 - self.angles.x),
+                self.angles.y + random.uniform(-pi, pi),
             )
         ]
         main_width = (random.random() * 0.4 + 0.5) * self.width
@@ -307,10 +308,10 @@ class Section:
             trunks = [False, False]
 
         def clamp(x):
-            if x.x > pi/2:
-                x.x = pi/2
-            if x.x < -pi/2:
-                x.x = -pi/2
+            if x.x > pi/4:
+                x.x = pi/4
+            if x.x < -pi/4:
+                x.x = -pi/4
             return x
         biases = [clamp(b) for b in biases]
         # TODO different branching logic for big vs small branches
@@ -420,6 +421,7 @@ LIGHT_DIR = Vec3(0, 1/sqrt(2), 1/sqrt(2)) * 1
 
 # LEAF_COLOURS = ["354341", "446d4d", "78944b", "abae54"]
 
+random.seed(1720987585756419465)
 
 MAX_HUE_SHIFT = 0.2
 NUM_COLOURS = 5
@@ -604,7 +606,7 @@ def loop():
 
 ang = Vec2(pi/2, 0)
 sel_leaf = 1
-last_seed = 0
+last_seed = 1720987585756419465
 
 def on_mouse_button_down(e):
     global root
