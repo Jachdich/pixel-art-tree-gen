@@ -1,9 +1,8 @@
 import pygame
 from math import *
-import random, time, colorsys, sys
+import random, time, colorsys
 import traceback
 
-MAX_MEMBERS = int(sys.argv[1])
 
 class Vec2:
     def __init__(self, x, y):
@@ -86,6 +85,7 @@ def rotateZ(coords, rad):
     return Vec3(x, y, coords.z)
 
 class Octree:
+    MAX_MEMBERS = 100
     def __init__(self, origin: Vec3, rad: float):
         self.children = []
         self.points = []
@@ -96,7 +96,7 @@ class Octree:
     def add(self, point: Vec3):
         if self.leaf:
             self.points.append(point)
-            if len(self.points) > MAX_MEMBERS:# and self.rad > 1 * LEAF_RAD:
+            if len(self.points) > self.MAX_MEMBERS:# and self.rad > 1 * LEAF_RAD:
                 self.subdivide()
         else:
             top   = int(point.x > self.centre.x)
@@ -164,9 +164,107 @@ class Octree:
 
             
 
-BRANCH_BIAS = 2*pi/5
-BIAS_STRENGTH = 0.6
+class Oak:
+    MAX_WIDTH = 8
+    BRANCH_BIAS = pi/4
+    BIAS_STRENGTH = 0.6
+    MAX_STRAIGHT_CHANCE = 0.97
+    MIN_STRAIGHT_CHANCE = 0.6
+    MIN_TRUNK_WIDTH = MAX_WIDTH * 0.3
+
+    # Max chance to branch unequally i.e. branching off the trunk
+    MAX_BRANCH_CHANCE = 0
+
+    # maximum angular deviations before being biased
+    MAX_DEVIATION = Vec2(pi/6, pi/6)
+
+    # minimum width of the lower trunk (before any branches). After the trunk is thinner than this, it will have a chance to branch.
+    MIN_LOWER_TRUNK_WIDTH = 0.9 * MAX_WIDTH
+    MIN_LOWER_TRUNK_LENGTH = 10 # minimum number of sections for the lower trunk to have
+
+    # standard deviation of the random angle added to a new section on a straight branch
+    STRAIGHT_DEVIATION_STDDEV = Vec2(pi/18, pi/18)
+
+    # each new section along a straight branch will be this fraction of the previous width
+    STRAIGHT_WIDTH_TRUNK_MULTIPLIER, STRAIGHT_WIDTH_BRANCH_MULTIPLIER = 0.98, 0.98
+
+    # fork: Y shape.
+    # azumuth difference - azimuth angle between the two new branches
+    # elevation: change in elevation of the new branches (mean is added to current elevation)
+    FORK_AZIMUTH_DIFFERENCE_MEAN, FORK_AZIMUTH_DIFFERENCE_STDDEV = pi, 2*pi/2
+    FORK_ELEVATION_MEAN, FORK_ELEVATION_STDDEV = pi/7, pi/4
+
+    # multiplier to give the trunk and branch a bit more width after dividing, as the sum of the thickness of two branches is often greater than the thickness of the original
+    BRANCH_EXTRA = 1.2
+    TRUNK_EXTRA = 1.2
+
+    # chance, based on width, to go straight, rather than branching
+    STRAIGHT_CHANCE = lambda width, is_trunk: (width/(sqrt(1/(Oak.MAX_STRAIGHT_CHANCE - Oak.MIN_STRAIGHT_CHANCE)) * Oak.MAX_WIDTH)) ** 2 + Oak.MIN_STRAIGHT_CHANCE
+
+    # how squished the leaves look. < 1 -> tall and skinny, > 1 -> short and fat, = 1 -> spherical
+    LEAF_OVALNESS = 1
+
+    # radius of leaf sphere(oid), picked randomly between these values
+    LEAF_MIN_RAD, LEAF_MAX_RAD = 4, 10
+
+    # how much the leaves can be pushed in and out randomly
+    LEAF_RAD_RANDOM_OFFSET = 4
+
+    # maximum elevation of the leaves, in effect cutting off the leaf bundle from the bottom
+    LEAF_MAX_ELEVATION = 3*pi/5
+
+class Poplar:
+    MAX_WIDTH = 8
+    BRANCH_BIAS = pi/8
+    BIAS_STRENGTH = 0.6
+    MAX_STRAIGHT_CHANCE = 0.9
+    MIN_STRAIGHT_CHANCE = 0.5
+    MIN_TRUNK_WIDTH = MAX_WIDTH * 0.3
+
+    # Max chance to branch unequally i.e. branching off the trunk
+    MAX_BRANCH_CHANCE = 5
+
+    # maximum angular deviations before being biased
+    MAX_DEVIATION = Vec2(pi/10, pi/10)
+
+    # minimum width of the lower trunk (before any branches). After the trunk is thinner than this, it will have a chance to branch.
+    MIN_LOWER_TRUNK_WIDTH = 0.9 * MAX_WIDTH
+    MIN_LOWER_TRUNK_LENGTH = 10 # minimum number of sections for the lower trunk to have
+
+    # standard deviation of the random angle added to a new section on a straight branch
+    STRAIGHT_DEVIATION_STDDEV = Vec2(pi/26, pi/26)
+
+    # each new section along a straight branch or trunk will be this fraction of the previous width
+    STRAIGHT_WIDTH_TRUNK_MULTIPLIER, STRAIGHT_WIDTH_BRANCH_MULTIPLIER = 0.98, 0.8
+
+    # fork: Y shape.
+    # azumuth difference - azimuth angle between the two new branches
+    # elevation: change in elevation of the new branches (mean is added to current elevation)
+    FORK_AZIMUTH_DIFFERENCE_MEAN, FORK_AZIMUTH_DIFFERENCE_STDDEV = pi, 2*pi/2
+    FORK_ELEVATION_MEAN, FORK_ELEVATION_STDDEV = pi/7, pi/4
+
+    # multiplier to give the trunk and branch a bit more width after dividing, as the sum of the thickness of two branches is often greater than the thickness of the original
+    BRANCH_EXTRA = 5
+    TRUNK_EXTRA = 1.1
+
+    STRAIGHT_CHANCE = lambda width, is_trunk: 0.2 if is_trunk else 0.9
+
+    # how squished the leaves look. < 1 -> tall and skinny, > 1 -> short and fat, = 1 -> spherical
+    LEAF_OVALNESS = 0.4
+
+    # radius of leaf sphere(oid), picked randomly between these values
+    LEAF_MIN_RAD, LEAF_MAX_RAD = 6, 12
+
+    # how much the leaves can be pushed in and out randomly
+    LEAF_RAD_RANDOM_OFFSET = 2
+
+    # maximum elevation of the leaves, in effect cutting off the leaf bundle from the bottom
+    LEAF_MAX_ELEVATION = pi
+    
+
+TT = Oak
 correct = True
+debug_leaves = False
 
 leaves = []
 bush_positions = []
@@ -199,32 +297,30 @@ class Section:
 
         bias_factor = abs(self.angles.x - bias.x)
         bias_input = Vec2(0, 0)
-        if bias_factor < pi/6:
+        if bias_factor < TT.MAX_DEVIATION.x:
             bias_input.x = 0
         elif self.angles.x > bias.x:
-            bias_input.x = -bias_factor * BIAS_STRENGTH
+            bias_input.x = -bias_factor * TT.BIAS_STRENGTH
         else:
-            bias_input.x = bias_factor * BIAS_STRENGTH
+            bias_input.x = bias_factor * TT.BIAS_STRENGTH
 
         if bias.y is not None:
             bias_factor = abs(self.angles.y - bias.y)
-            if bias_factor < pi/6:
+            if bias_factor < TT.MAX_DEVIATION.y:
                 bias_input.y = 0
             elif self.angles.y > bias.y:
-                bias_input.y = -bias_factor * BIAS_STRENGTH
+                bias_input.y = -bias_factor * TT.BIAS_STRENGTH
             else:
-                bias_input.y = bias_factor * BIAS_STRENGTH
+                bias_input.y = bias_factor * TT.BIAS_STRENGTH
 
-        MAX_STRAIGHT_CHANCE = 0.97
-        MIN_STRAIGHT_CHANCE = 0.6
-        
-        straight_chance = (self.width/(sqrt(1/(MAX_STRAIGHT_CHANCE - MIN_STRAIGHT_CHANCE)) * MAX_WIDTH)) ** 2 + MIN_STRAIGHT_CHANCE
-    
+        straight_chance = TT.STRAIGHT_CHANCE(self.width, self.is_trunk)
+
         # make the trunk longer
-        if self.width >= 0.9 * MAX_WIDTH and inarow < 10:
+        if self.width >= TT.MIN_LOWER_TRUNK_WIDTH and inarow < TT.MIN_LOWER_TRUNK_LENGTH:
             straight_chance = 1
         
-        n = MAX_WIDTH
+        n = TT.MAX_WIDTH
+        # TODO make parameter
         if random.random() > straight_chance or inarow > (-5/(n-1)*self.width + 5/(n-1)*n + 8):
             self.branch(bias_input)
         else:
@@ -232,27 +328,21 @@ class Section:
 
     def straight_branch_angles(self, bias_input: Vec2):
         return Vec2(
-            self.angles.x + random.gauss(bias_input.x, pi/18),
-            self.angles.y + random.gauss(bias_input.y, pi/18),
+            self.angles.x + random.gauss(bias_input.x, TT.STRAIGHT_DEVIATION_STDDEV.x),
+            self.angles.y + random.gauss(bias_input.y, TT.STRAIGHT_DEVIATION_STDDEV.y),
         )
     
     def go_straight(self, bias_input: Vec2):
-        # angles.x = bias # TODO Temp
         angles = self.straight_branch_angles(bias_input)
-        next = Section(self.length, self.width * 0.98, self.end_pos, angles)
+        next = Section(self.length, self.width * (TT.STRAIGHT_WIDTH_TRUNK_MULTIPLIER if self.is_trunk else TT.STRAIGHT_WIDTH_BRANCH_MULTIPLIER), self.end_pos, angles)
         next.tree(self.inarow + 1, self.bias, self.is_trunk)
         self.children = [next]
 
     def branch(self, bias_input: Vec2):
-        if correct:
-            MIN_TRUNK_WIDTH = MAX_WIDTH * 0.3
+        if self.width > TT.MIN_TRUNK_WIDTH:
+            branch_chance = (log(self.width-TT.MIN_TRUNK_WIDTH)/log(TT.MAX_WIDTH-TT.MIN_TRUNK_WIDTH)+1)/2 * TT.MAX_BRANCH_CHANCE
         else:
-            MIN_TRUNK_WIDTH = 10
-        MAX_BRANCH_CHANCE = 1
-        
-        if self.width > MIN_TRUNK_WIDTH:
-            branch_chance = (log(self.width-MIN_TRUNK_WIDTH)/log(MAX_WIDTH-MIN_TRUNK_WIDTH)+1)/2 * MAX_BRANCH_CHANCE
-        else:
+
             branch_chance = 0
 
         if random.random() < branch_chance and self.is_trunk:
@@ -272,21 +362,24 @@ class Section:
                 self.angles.y + random.uniform(-pi, pi),
             )
         ]
-        main_width = (random.random() * 0.4 + 0.5) * self.width
+        main_width = random.uniform(self.width * 0.85, self.width * 0.86)
         widths = [
-            main_width,
-            self.width - main_width
+            main_width * TT.TRUNK_EXTRA,
+            (self.width - main_width) * TT.BRANCH_EXTRA
         ]
 
-        biases = [Vec2(0, None), Vec2(BRANCH_BIAS, angles[1].y)]
+        biases = [Vec2(0, None), Vec2(TT.BRANCH_BIAS, angles[1].y)]
         trunks = [True, False]
 
         return angles, widths, biases, trunks
 
     def branch_equally(self):
+        # TODO maybe generalise this? have some angle between forks, and some rotation angle (i.e. are the forks going sideways from eachother or up/down or inbetween), and calculate azimuth and elevation from that
+        # if we're going basically up, then make a fork i.e. like a Y shape
         if self.angles.x < pi/8:
             angles = self.get_fork_angles()
         else:
+            # otherwise just branch randomly basically ecksdee
             # TODO bias towards going in the same direction or something
             angles = [
                 Vec2(
@@ -299,11 +392,11 @@ class Section:
                 )
             ]
 
-        if self.is_trunk and self.width > 0.3 * MAX_WIDTH: # TEMP: figure out a better heuristic for when to branch into 2 trunks
+        if self.is_trunk and self.width > TT.MIN_TRUNK_WIDTH:
             biases = [Vec2(angles[0].x, None), Vec2(angles[1].x, None)]
             trunks = [True, True]
         else:
-            biases = [Vec2(BRANCH_BIAS, angles[0].y), Vec2(BRANCH_BIAS, angles[1].y)]
+            biases = [Vec2(TT.BRANCH_BIAS, angles[0].y), Vec2(TT.BRANCH_BIAS, angles[1].y)]
             # biases = [angles[0].x, angles[1].x]
             trunks = [False, False]
 
@@ -314,27 +407,27 @@ class Section:
                 x.x = -pi/4
             return x
         biases = [clamp(b) for b in biases]
-        # TODO different branching logic for big vs small branches
+        # TT.TODO different branching logic for big vs small branches
         # big branches should aim to get away from the others (bias branches to go away from the centre) and be relatively long
 
         # when branching, consider the current angle to decide what kind of yaw/azimuth the branch can be at. if going relatively up, any yaw angle is permitted, if going sideways, bias towards that direction.
         # punish getting too far from the tree, or too close ot other branches
         width = random.gauss(0.5, 0.1) * self.width
         widths = [
-            width * 1.2,
-            (self.width - width) * 1.2
+            width * TT.TRUNK_EXTRA,
+            (self.width - width) * TT.TRUNK_EXTRA
         ]
 
         return angles, widths, biases, trunks
 
     def get_fork_angles(self):
         # make sure branches are somewhat different direction to eachother
-        azimuth_difference = random.uniform(pi/2, 3*pi/2)
+        azimuth_difference = random.uniform(TT.FORK_AZIMUTH_DIFFERENCE_MEAN, TT.FORK_AZIMUTH_DIFFERENCE_STDDEV)
         azimuth_a = random.uniform(0, 2*pi)
         azimuth_b = azimuth_a + azimuth_difference
 
-        elevation_a = abs(random.gauss(self.angles.x, pi/4) + pi/7)
-        elevation_b = abs(random.gauss(self.angles.x, pi/4) + pi/7)
+        elevation_a = abs(random.gauss(self.angles.x + TT.FORK_ELEVATION_MEAN, TT.FORK_ELEVATION_STDDEV))
+        elevation_b = abs(random.gauss(self.angles.x + TT.FORK_ELEVATION_MEAN, TT.FORK_ELEVATION_STDDEV))
         
         return [
             Vec2(elevation_a, azimuth_a),
@@ -362,28 +455,26 @@ class Section:
             for n in range(0, int(self.length)):
                 end_pos = spherical(self.angles) * n + self.pos
                 end_pos_ss = rotateX(rotateZ(end_pos, ang.y), ang.x)
-                actual_width = round(self.width / MAX_WIDTH * 2.8) + 1
+                actual_width = round(self.width / TT.MAX_WIDTH * 2.8) + 1
 
                 
                 for dx in range(actual_width):
-                    # for dy in range(round(self.length)):
-                        dy = 0
-                        x = int(end_pos_ss.x + dx - actual_width/2) + ORIGIN.x
-                        y = int(end_pos_ss.y + dy - actual_width/2) + ORIGIN.y
-                        depth = buf[y * resolution + x][1]
-                        if end_pos_ss.z < depth:
-                            pixel_ws = rotateZ(rotateX(Vec3(x, y, end_pos_ss.z) - Vec3(ORIGIN.x, ORIGIN.y, 0), -ang.x), -ang.y)
-                            
-                            light = raycast(pixel_ws)
-                            col = TRUNK_COLOURS[int(light * (len(TRUNK_COLOURS) - 1))]
-                            buf[y*resolution+x] = [col, end_pos_ss.z, False]
+                    dy = 0
+                    x = int(end_pos_ss.x + dx - actual_width/2) + ORIGIN.x
+                    y = int(end_pos_ss.y + dy - actual_width/2) + ORIGIN.y
+                    depth = buf[y * resolution + x][1]
+                    if end_pos_ss.z < depth:
+                        pixel_ws = rotateZ(rotateX(Vec3(x, y, end_pos_ss.z) - Vec3(ORIGIN.x, ORIGIN.y, 0), -ang.x), -ang.y)
+                        
+                        light = raycast(pixel_ws)
+                        col = TRUNK_COLOURS[int(light * (len(TRUNK_COLOURS) - 1))]
+                        buf[y*resolution+x] = [col, end_pos_ss.z, False]
         for c in self.children:
             c.draw(ang)
 
 scl = 12
 DRAW_LINE = False
 DRAW_PX = True
-MAX_WIDTH = 8
 LENGTH = 2
 resolution = 100
 w, h = resolution*scl, resolution*scl
@@ -465,10 +556,21 @@ def make_leaves():
         #     pos = self.pos + offset
         #     leaves.append(pos)
 
-        max_radius = random.uniform(4, 10)
-        for elevation in frange(0, 3*pi/5, 0.8 / max_radius):
-            for azimuth in frange(-pi, pi, lerp(3.0, 0.3, elevation / (3*pi/5)) / max_radius):
-                radius = random.uniform(max_radius - 4, max_radius)
+        max_radius = random.uniform(TT.LEAF_MIN_RAD, TT.LEAF_MAX_RAD)
+        max_elevation = TT.LEAF_MAX_ELEVATION
+        for elevation in frange(0, max_elevation, 0.8 / max_radius):
+            max_step = 0.4 # TODO this is not good enough!
+            min_step = 0.2
+            a = 2*(max_step - min_step)/pi
+            x = elevation
+            step = abs((a*x-pi/2*a))+min_step
+            for azimuth in frange(-pi, pi, step):
+                γ = elevation
+                λ = azimuth
+                a, b = 1, 1
+                c = TT.LEAF_OVALNESS
+                actual_radius = a*b*c/sqrt(c**2*(b**2*cos(λ)**2+a**2*sin(λ)**2)*cos(γ)**2 + a**2*b**2*sin(γ)**2) * max_radius
+                radius = random.uniform(actual_radius - TT.LEAF_RAD_RANDOM_OFFSET, actual_radius)
                 dir = spherical(Vec2(elevation, azimuth))
                 offset = dir * radius
                 pos = bush_pos + offset
@@ -480,7 +582,7 @@ def make_tree():
     global root, leaf_octree
     leaves.clear()
     bush_positions.clear()
-    root = Section(LENGTH, MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
+    root = Section(LENGTH, TT.MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
     root.tree(0, Vec2(0, None), True)
 
     make_leaves()
@@ -506,7 +608,7 @@ def raycast(pos):
         col = (0, 0, 255)
         leaves_hit = leaf_octree.query(ray)
         if leaves_hit > 0:
-            light *= 0.98 ** leaves_hit
+            light *= 0.995 ** leaves_hit
             col = (255, 0, 0)
 
         if DRAW_LINE:
@@ -586,21 +688,20 @@ def loop():
                     pygame.draw.rect(screen, col, (x * scl, y * scl - scl/2, round(scl), round(scl)))
         # pygame.image.save(screen, f"frame{frame_number:04d}.png")
         frame_number += 1
-    else:
-        pass
+    elif debug_leaves:
         # leaf_octree.draw()
-        # for leaf in leaves:
-        #     pos = rotateX(rotateZ(leaf, ang.y), ang.x)
+        for leaf in leaves:
+            pos = rotateX(rotateZ(leaf, ang.y), ang.x)
 
-        #     hue = 0.3
-        #     value = (-pos.z + 30) / 60
-        #     if value > 1: value = 1
-        #     if value < 0: value = 0
-        #     r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
-        #     col = (int(r*255), int(g*255), int(b*255))
-        #     pos = pos.xy() + ORIGIN
-        #     idx = int(pos.y) * resolution + int(pos.x)
-        #     pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
+            hue = 0.3
+            value = (-pos.z + 30) / 60
+            if value > 1: value = 1
+            if value < 0: value = 0
+            r, g, b = colorsys.hsv_to_rgb(hue, 1, value)
+            col = (int(r*255), int(g*255), int(b*255))
+            pos = pos.xy() + ORIGIN
+            idx = int(pos.y) * resolution + int(pos.x)
+            pygame.draw.circle(screen, col, (pos.x * scl, pos.y * scl), LEAF_RAD)
     pygame.display.flip()
     # ang.y += 0.08
 
@@ -632,7 +733,7 @@ def on_mouse_motion(e):
 import pygame
 def on_keydown(e):
     global DRAW_PX
-    global DRAW_LINE, correct
+    global DRAW_LINE, correct, TT, debug_leaves
     if e.key == pygame.K_t:
         if DRAW_PX:
             DRAW_PX = False
@@ -643,8 +744,12 @@ def on_keydown(e):
     if e.key == pygame.K_e:
         correct = not correct
         random.seed(last_seed)
+        TT = Poplar if correct else Oak
         make_tree()
         print(correct)
+
+    if e.key == pygame.K_l:
+        debug_leaves = not debug_leaves
         
 
 def main():
