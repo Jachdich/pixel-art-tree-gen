@@ -85,7 +85,7 @@ def rotateZ(coords, rad):
     return Vec3(x, y, coords.z)
 
 class Octree:
-    MAX_MEMBERS = 100
+    MAX_MEMBERS = 10
     def __init__(self, origin: Vec3, rad: float):
         self.children = []
         self.points = []
@@ -558,23 +558,39 @@ def make_leaves():
 
         max_radius = random.uniform(TT.LEAF_MIN_RAD, TT.LEAF_MAX_RAD)
         max_elevation = TT.LEAF_MAX_ELEVATION
-        for elevation in frange(0, max_elevation, 0.8 / max_radius):
-            max_step = 0.4 # TODO this is not good enough!
-            min_step = 0.2
-            a = 2*(max_step - min_step)/pi
+        # for elevation in frange(0, max_elevation, 0.8 / max_radius):
+        elevation = 0
+        while True:
+            a, b = 1, 1
+            c = TT.LEAF_OVALNESS
+            # max_step = 1
+            # min_step = 0.5
+            # a = 2*(max_step - min_step)/pi
             x = elevation
-            step = abs((a*x-pi/2*a))+min_step
+            # step = abs((a*x-pi/2*a))+min_step
+            # step = max_step * sqrt(1-(x - pi/2)**2 / (pi/2)**2) + max_step + min_step
+            points_per_circle = 40
+            d = pi/2
+            num_points = b*(1-((x-d)/d)**2) * points_per_circle
+            if num_points == 0:
+                num_points = 1
+            step = 2*pi/num_points
             for azimuth in frange(-pi, pi, step):
                 γ = elevation
                 λ = azimuth
-                a, b = 1, 1
-                c = TT.LEAF_OVALNESS
                 actual_radius = a*b*c/sqrt(c**2*(b**2*cos(λ)**2+a**2*sin(λ)**2)*cos(γ)**2 + a**2*b**2*sin(γ)**2) * max_radius
                 radius = random.uniform(actual_radius - TT.LEAF_RAD_RANDOM_OFFSET, actual_radius)
                 dir = spherical(Vec2(elevation, azimuth))
                 offset = dir * radius
                 pos = bush_pos + offset
                 leaves.append(pos)
+
+            de = (0.2) * (1 - ((elevation-pi/2) / (pi/2))**2 ) + 0.0001
+            elevation += de
+            print(elevation, de)
+            if elevation > pi:
+                break
+        # break
 
 root = None
 leaf_octree = None
@@ -608,7 +624,7 @@ def raycast(pos):
         col = (0, 0, 255)
         leaves_hit = leaf_octree.query(ray)
         if leaves_hit > 0:
-            light *= 0.995 ** leaves_hit
+            light *= 0.98 ** leaves_hit
             col = (255, 0, 0)
 
         if DRAW_LINE:
