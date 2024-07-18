@@ -250,7 +250,7 @@ class Poplar:
     STRAIGHT_CHANCE = lambda width, is_trunk: 0.2 if is_trunk else 0.9
 
     # how squished the leaves look. < 1 -> tall and skinny, > 1 -> short and fat, = 1 -> spherical
-    LEAF_OVALNESS = 0.4
+    LEAF_OVALNESS = 0.3
 
     # radius of leaf sphere(oid), picked randomly between these values
     LEAF_MIN_RAD, LEAF_MAX_RAD = 6, 12
@@ -262,7 +262,7 @@ class Poplar:
     LEAF_MAX_ELEVATION = pi
     
 
-TT = Oak
+TT = Poplar
 correct = True
 debug_leaves = False
 
@@ -544,6 +544,27 @@ def parse_html(code):
 # LEAF_COLOURS = [parse_html(col) for col in LEAF_COLOURS]
 TRUNK_COLOURS = [parse_html(col) for col in TRUNK_COLOURS]
 
+import numpy as np
+import scipy as sp
+import scipy.optimize
+
+def angles_in_ellipse(
+        num,
+        a,
+        b):
+    assert(num > 0)
+    assert(a < b)
+    angles = 2 * np.pi * np.arange(num) / num
+    if a != b:
+        e2 = (1.0 - a ** 2.0 / b ** 2.0)
+        tot_size = sp.special.ellipeinc(2.0 * np.pi, e2)
+        arc_size = tot_size / num
+        arcs = np.arange(num) * arc_size
+        res = sp.optimize.root(
+            lambda x: (sp.special.ellipeinc(x, e2) - arcs), angles)
+        angles = res.x 
+    return angles
+
 def make_leaves():
     for bush_pos in bush_positions:
         # # TODO leaf clumping??
@@ -559,10 +580,13 @@ def make_leaves():
         max_radius = random.uniform(TT.LEAF_MIN_RAD, TT.LEAF_MAX_RAD)
         max_elevation = TT.LEAF_MAX_ELEVATION
         # for elevation in frange(0, max_elevation, 0.8 / max_radius):
-        elevation = 0
-        while True:
-            a, b = 1, 1
-            c = TT.LEAF_OVALNESS
+
+        a, b = 1, 1
+        c = TT.LEAF_OVALNESS
+        for elevation in frange(0, max_elevation, 0.1):
+        # for elevation in angles_in_ellipse(50, c, 1):
+            if elevation > pi: continue
+            # print(elevation)
             # max_step = 1
             # min_step = 0.5
             # a = 2*(max_step - min_step)/pi
@@ -579,17 +603,13 @@ def make_leaves():
                 γ = elevation
                 λ = azimuth
                 actual_radius = a*b*c/sqrt(c**2*(b**2*cos(λ)**2+a**2*sin(λ)**2)*cos(γ)**2 + a**2*b**2*sin(γ)**2) * max_radius
-                radius = random.uniform(actual_radius - TT.LEAF_RAD_RANDOM_OFFSET, actual_radius)
+                radius = actual_radius#random.uniform(actual_radius - TT.LEAF_RAD_RANDOM_OFFSET, actual_radius)
                 dir = spherical(Vec2(elevation, azimuth))
                 offset = dir * radius
                 pos = bush_pos + offset
                 leaves.append(pos)
+        print(len(leaves))
 
-            de = (0.2) * (1 - ((elevation-pi/2) / (pi/2))**2 ) + 0.0001
-            elevation += de
-            print(elevation, de)
-            if elevation > pi:
-                break
         # break
 
 root = None
@@ -598,10 +618,13 @@ def make_tree():
     global root, leaf_octree
     leaves.clear()
     bush_positions.clear()
+    a = time.time()
     root = Section(LENGTH, TT.MAX_WIDTH, Vec3(0.0, 0.0, 0.0), Vec2(0.0, 0.0))
     root.tree(0, Vec2(0, None), True)
+    b = time.time()
 
     make_leaves()
+    c = time.time()
     
     avg = lambda xs: sum(xs) / len(xs)
     o = Vec3(avg([l.x for l in leaves]), avg([l.y for l in leaves]), avg([l.z for l in leaves]))
@@ -609,6 +632,8 @@ def make_tree():
     leaf_octree = Octree(o, rad)
     for leaf in leaves:
         leaf_octree.add(leaf)
+    d = time.time()
+    print(f"trunk: {b-a}, leaves: {c-b}, octree: {d-c}, total: {d-a}")
 
 make_tree()
 
@@ -659,8 +684,8 @@ def loop():
                 buf[idx] = (leaf, pos.z)
     else:
         pass
-        leaf = leaves[sel_leaf]
-        draw_leaf(leaf)
+        # leaf = leaves[sel_leaf]
+        # draw_leaf(leaf)
     
     if DRAW_PX:
         # offset = int(w * (scl/8 - 1) / 2)
